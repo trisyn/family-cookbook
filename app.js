@@ -503,9 +503,6 @@ async function start() {
   $("thumbDown").addEventListener("click", () => voteOnRecipe(-1));
   $("commentForm").addEventListener("submit", postRecipeComment);
   $("cancelReply").addEventListener("click", () => cancelReply());
-  $("refreshSocial").addEventListener("click", () => {
-    if (selected && !socialBusy) { loadSocial(selected.id); refreshCardCounts(); }
-  });
   $("moreComments").addEventListener("click", () => {
     if (selected && !socialBusy) { commentLimit += 50; loadSocial(selected.id); }
   });
@@ -739,7 +736,7 @@ function paintCommentVotes(container, counts) {
     button.setAttribute("aria-label", `${label} on comment: ${number}`);
     button.setAttribute("aria-pressed", String(Number(counts?.my_vote) === value));
     button.disabled = socialBusy || !socialReady || !counts;
-    button.title = counts ? "Click again to remove your vote" : "Vote counts unavailable; use Refresh to retry";
+    button.title = counts ? "Click again to remove your vote" : "Vote counts unavailable; close and reopen the recipe to retry";
   }
 }
 
@@ -779,7 +776,7 @@ async function voteOnComment(commentId, recipeId, value) {
     if (version === socialVersion && isCurrentRecipe(recipeId)) {
       await fetchCommentVotes([commentId], recipeId, version);
       $("commentMessage").textContent = commentVoteCounts.has(commentId)
-        ? "Comment vote saved." : "Vote saved; use Refresh to reload its count.";
+        ? "Comment vote saved." : "Vote saved; close and reopen the recipe to reload its count.";
     }
   } catch (error) {
     if (version === socialVersion && isCurrentRecipe(recipeId)) {
@@ -907,7 +904,6 @@ function isCurrentRecipe(id) {
 function updateSocialControls() {
   const disabled = socialBusy || !socialReady;
   for (const id of ["thumbUp", "thumbDown", "postComment", "moreComments"]) $(id).disabled = disabled;
-  $("refreshSocial").disabled = socialBusy;
   for (const button of $("commentList").querySelectorAll("button[data-delete-comment], button[data-reply-comment]")) button.disabled = disabled;
   $("cancelReply").disabled = socialBusy;
   refreshCommentVoteButtons();
@@ -961,7 +957,7 @@ async function loadSocial(recipeId) {
     $("socialMessage").textContent = "";
   } catch (error) {
     if (version === socialVersion && isCurrentRecipe(recipeId)) {
-      $("socialMessage").textContent = `Could not load votes or comments: ${error.message}. Try Refresh.`;
+      $("socialMessage").textContent = `Could not load votes or comments: ${error.message}. Close and reopen the recipe to retry.`;
     }
   } finally {
     if (version === socialVersion && isCurrentRecipe(recipeId)) updateSocialControls();
