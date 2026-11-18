@@ -1,7 +1,7 @@
 import { createClient } from
   "https://esm.sh/@supabase/supabase-js@2";
 
-const SUPABASE_URL = "https://ettfsfmlzvgexrkxqvqj.supabase.co/rest/v1/";
+const SUPABASE_URL = "https://ettfsfmlzvgexrkxqvqj.supabase.co";
 const SUPABASE_KEY = "sb_publishable_g0DghHvJE29vnkrdCXWlBg_sMd9-y-D";
 
 const $ = id => document.getElementById(id);
