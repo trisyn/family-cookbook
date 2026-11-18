@@ -25,6 +25,7 @@ let socialBusy = false;
 let socialReady = false;
 let myVote = 0;
 let commentLimit = 50;
+let replyTarget = null;
 let cardCounts = new Map();
 let cardCountsVersion = 0;
 const avatarCache = new Map();
@@ -199,6 +200,7 @@ async function openRecipe(recipe) {
   $("delete").hidden = recipe.owner_id !== user.id;
   $("recipePhotos").replaceChildren();
   $("viewer").showModal();
+  cancelReply();
   $("commentBody").value = "";
   $("commentMessage").textContent = "";
   commentLimit = 50;
@@ -499,6 +501,7 @@ async function start() {
   $("thumbUp").addEventListener("click", () => voteOnRecipe(1));
   $("thumbDown").addEventListener("click", () => voteOnRecipe(-1));
   $("commentForm").addEventListener("submit", postRecipeComment);
+  $("cancelReply").addEventListener("click", () => cancelReply());
   $("refreshSocial").addEventListener("click", () => {
     if (selected && !socialBusy) { loadSocial(selected.id); refreshCardCounts(); }
   });
@@ -724,6 +727,93 @@ async function saveProfile(event) {
 }
 
 
+
+function cancelReply(clearDraft = true) {
+  replyTarget = null;
+  $("replyNotice").hidden = true;
+  $("commentComposerHome").append($("commentForm"));
+  $("postComment").textContent = "Post comment";
+  if (clearDraft) $("commentBody").value = "";
+}
+
+function beginReply(comment, name, mount) {
+  if (socialBusy || !socialReady) return;
+  if ($("commentBody").value.trim() && replyTarget?.id !== comment.id &&
+      !confirm("Replace your current comment draft with a reply?")) return;
+  if (replyTarget?.id !== comment.id) $("commentBody").value = "";
+  replyTarget = { id: comment.id };
+  $("replyToName").textContent = `Replying to ${name}`;
+  $("replyNotice").hidden = false;
+  $("postComment").textContent = "Post reply";
+  mount.append($("commentForm"));
+  $("commentBody").focus();
+}
+
+function renderThreadComment(comment, recipeId, people, canReply) {
+  const profile = people.find(p => p.user_id === comment.author_id);
+  const name = profile?.display_name || (comment.author_id ? "Family member" : "Former family member");
+  const row = node("article", undefined, "comment");
+  const content = node("div", undefined, "comment-content");
+  const heading = node(profile ? "button" : "strong", name, "comment-name");
+  if (profile) {
+    heading.type = "button";
+    heading.addEventListener("click", () => {
+      $("viewer").close(); profiles = people; showProfile(profile.user_id);
+    });
+  }
+  const date = node("time", new Date(comment.created_at).toLocaleString(), "muted");
+  date.dateTime = comment.created_at;
+  content.append(heading, date, node("p", comment.body, "text"));
+  const actions = node("div", undefined, "row");
+  if (canReply) {
+    const reply = node("button", "Reply", "secondary");
+    reply.type = "button";
+    reply.addEventListener("click", () => beginReply(comment, name, content));
+    actions.append(reply);
+  }
+  if (comment.author_id === user.id) {
+    const remove = node("button", "Delete my comment", "secondary");
+    remove.type = "button";
+    remove.dataset.deleteComment = comment.id;
+    remove.addEventListener("click", () => deleteRecipeComment(comment.id, recipeId));
+    actions.append(remove);
+  }
+  content.append(actions);
+  row.append(avatar(profile || { display_name: name }), content);
+  return { row, content };
+}
+
+async function loadThreadReplies(parentId, recipeId, people, container, version) {
+  let offset = 0;
+  let fetching = false;
+  const list = node("div");
+  const more = node("button", "Loading replies…", "secondary");
+  more.type = "button";
+  container.append(list, more);
+  async function nextPage() {
+    if (fetching || !isCurrentRecipe(recipeId) || version !== socialVersion) return;
+    fetching = true; more.disabled = true;
+    try {
+      const rows = check(await db.from("recipe_comments").select("*")
+        .eq("recipe_id", recipeId).eq("parent_id", parentId)
+        .order("created_at", { ascending: true }).order("id", { ascending: true })
+        .range(offset, offset + 49));
+      if (version !== socialVersion || !isCurrentRecipe(recipeId) || !container.isConnected) return;
+      for (const reply of rows) list.append(renderThreadComment(reply, recipeId, people, false).row);
+      offset += rows.length;
+      more.hidden = rows.length < 50;
+      more.textContent = "Show more replies";
+    } catch (error) {
+      if (version === socialVersion && isCurrentRecipe(recipeId)) {
+        more.textContent = "Retry loading replies";
+        more.title = error.message;
+      }
+    } finally { fetching = false; more.disabled = false; }
+  }
+  more.addEventListener("click", nextPage);
+  await nextPage();
+}
+
 function isCurrentRecipe(id) {
   return Boolean(user && $("viewer").open && selected?.id === id);
 }
@@ -740,6 +830,7 @@ async function loadSocial(recipeId) {
   socialReady = false;
   updateSocialControls();
   $("socialMessage").textContent = "Loading votes and comments…";
+  $("commentComposerHome").append($("commentForm"));
   $("commentList").replaceChildren();
   $("moreComments").hidden = true;
   $("thumbUp").textContent = "👍 …";
@@ -749,7 +840,7 @@ async function loadSocial(recipeId) {
   try {
     const results = await Promise.all([
       db.rpc("recipe_vote_summary", { p_recipe_id: recipeId }),
-      db.from("recipe_comments").select("*").eq("recipe_id", recipeId)
+      db.from("recipe_comments").select("*").eq("recipe_id", recipeId).is("parent_id", null)
         .order("created_at", { ascending: false }).order("id", { ascending: false })
         .range(0, commentLimit),
       db.from("profiles").select("*")
@@ -766,31 +857,13 @@ async function loadSocial(recipeId) {
     $("thumbDown").setAttribute("aria-pressed", String(myVote === -1));
     if (!comments.length) $("commentList").append(node("p", "No comments yet. Be the first to share a tip!", "muted"));
     for (const comment of comments.slice(0, commentLimit).reverse()) {
-      const profile = people.find(p => p.user_id === comment.author_id);
-      const name = profile?.display_name || (comment.author_id ? "Family member" : "Former family member");
-      const row = node("article", undefined, "comment");
-      const content = node("div", undefined, "comment-content");
-      const heading = node(profile ? "button" : "strong", name, "comment-name");
-      if (profile) {
-        heading.type = "button";
-        heading.addEventListener("click", () => {
-          $("viewer").close();
-          profiles = people;
-          showProfile(profile.user_id);
-        });
-      }
-      const date = node("time", new Date(comment.created_at).toLocaleString(), "muted");
-      date.dateTime = comment.created_at;
-      content.append(heading, date, node("p", comment.body, "text"));
-      if (comment.author_id === user.id) {
-        const remove = node("button", "Delete my comment", "secondary");
-        remove.type = "button";
-        remove.dataset.deleteComment = comment.id;
-        remove.addEventListener("click", () => deleteRecipeComment(comment.id, recipeId));
-        content.append(remove);
-      }
-      row.append(avatar(profile || { display_name: name }), content);
-      $("commentList").append(row);
+      const thread = node("section", undefined, "comment-thread");
+      const rendered = renderThreadComment(comment, recipeId, people, true);
+      const replies = node("div", undefined, "comment-replies");
+      thread.append(rendered.row, replies);
+      $("commentList").append(thread);
+      if (replyTarget?.id === comment.id) rendered.content.append($("commentForm"));
+      loadThreadReplies(comment.id, recipeId, people, replies, version);
     }
     $("moreComments").hidden = comments.length <= commentLimit;
     socialReady = true;
@@ -834,15 +907,17 @@ async function postRecipeComment(event) {
   if (!body) { $("commentMessage").textContent = "Write a comment first."; return; }
   if (body.length > 2000) { $("commentMessage").textContent = "Please keep comments under 2,000 characters."; return; }
   const recipeId = selected.id;
+  const parentId = replyTarget?.id || null;
   socialBusy = true;
   updateSocialControls();
   $("commentMessage").textContent = "Posting…";
   try {
-    check(await db.from("recipe_comments").insert({ recipe_id: recipeId, author_id: user.id, body }));
+    check(await db.from("recipe_comments").insert({ recipe_id: recipeId, author_id: user.id, body, parent_id: parentId }));
     await refreshCardCounts();
     if (isCurrentRecipe(recipeId)) {
       if ($("commentBody").value.trim() === body) $("commentBody").value = "";
-      $("commentMessage").textContent = "Comment posted.";
+      if (replyTarget?.id === parentId) cancelReply(false);
+      $("commentMessage").textContent = parentId ? "Reply posted." : "Comment posted.";
       await loadSocial(recipeId);
     }
   } catch (error) {
@@ -854,12 +929,13 @@ async function postRecipeComment(event) {
 }
 
 async function deleteRecipeComment(commentId, recipeId) {
-  if (socialBusy || !socialReady || !isCurrentRecipe(recipeId) || !confirm("Delete your comment?")) return;
+  if (socialBusy || !socialReady || !isCurrentRecipe(recipeId) || !confirm("Delete your comment? Any replies to it will stay as separate comments.")) return;
   socialBusy = true;
   updateSocialControls();
   try {
     check(await db.from("recipe_comments").delete().eq("id", commentId).eq("author_id", user.id).select().single());
     await refreshCardCounts();
+    if (replyTarget?.id === commentId) cancelReply();
     if (isCurrentRecipe(recipeId)) await loadSocial(recipeId);
   } catch (error) {
     if (isCurrentRecipe(recipeId)) $("commentMessage").textContent = `Could not delete comment: ${error.message}`;

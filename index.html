@@ -145,6 +145,10 @@
     .recipe-card-footer > button { padding: 10px 12px; font-size: 14px; }
     .recipe-card-stats { display: flex; gap: 7px; margin-left: auto; font-size: 12px; color: var(--ink); }
     .recipe-card-stats > span { white-space: nowrap; }
+    .comment-replies { margin-left: 24px; padding-left: 12px; border-left: 2px solid var(--line); }
+    .comment-content #commentForm { margin-top: 16px; }
+    #replyNotice { margin-bottom: 8px; }
+    @media (max-width: 480px) { .comment-replies { margin-left: 8px; padding-left: 8px; } }
   </style>
 </head>
 <body>
@@ -224,11 +228,17 @@
     <p class="muted">Only totals are shown. Tap your selected thumb again to remove your vote.</p>
     <p id="socialMessage" role="status" aria-live="polite"></p>
     <h3>Family comments</h3>
+    <div id="commentComposerHome">
     <form id="commentForm">
+      <div id="replyNotice" class="row" hidden>
+        <strong id="replyToName"></strong>
+        <button id="cancelReply" type="button" class="secondary">Cancel reply</button>
+      </div>
       <label for="commentBody">Leave a comment</label>
       <textarea id="commentBody" maxlength="2000" required placeholder="How did it turn out? Any tips for the family?"></textarea>
       <button id="postComment" type="submit" disabled>Post comment</button>
     </form>
+    </div>
     <p id="commentMessage" role="status" aria-live="polite"></p>
     <div id="commentList" aria-label="Comments"></div>
     <button id="moreComments" type="button" class="secondary" hidden>Show older comments</button>
@@ -303,6 +313,6 @@
     <button type="submit">Save profile</button>
   </form>
 </dialog>
-<script type="module" src="./app.js?v=card-counts-1"></script>
+<script type="module" src="./app.js?v=replies-1"></script>
 </body>
 </html>
