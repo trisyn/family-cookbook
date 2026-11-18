@@ -20,6 +20,11 @@ let profiles = [];
 let profileOwner = null;
 let profileBusy = false;
 let sessionVersion = 0;
+let socialVersion = 0;
+let socialBusy = false;
+let socialReady = false;
+let myVote = 0;
+let commentLimit = 50;
 const avatarCache = new Map();
 
 function status(message) {
@@ -148,6 +153,10 @@ async function openRecipe(recipe) {
   $("delete").hidden = recipe.owner_id !== user.id;
   $("recipePhotos").replaceChildren();
   $("viewer").showModal();
+  $("commentBody").value = "";
+  $("commentMessage").textContent = "";
+  commentLimit = 50;
+  loadSocial(recipe.id);
 
   const photos = await listPhotos(recipe);
   if (selected?.id !== recipe.id || !$("viewer").open) return;
@@ -438,6 +447,16 @@ async function start() {
   }
 
   db = createClient(SUPABASE_URL, SUPABASE_KEY);
+  $("thumbUp").addEventListener("click", () => voteOnRecipe(1));
+  $("thumbDown").addEventListener("click", () => voteOnRecipe(-1));
+  $("commentForm").addEventListener("submit", postRecipeComment);
+  $("refreshSocial").addEventListener("click", () => {
+    if (selected && !socialBusy) loadSocial(selected.id);
+  });
+  $("moreComments").addEventListener("click", () => {
+    if (selected && !socialBusy) { commentLimit += 50; loadSocial(selected.id); }
+  });
+  $("viewer").addEventListener("close", () => { socialVersion++; socialReady = false; });
   $("addIngredient").addEventListener("click", () => addIngredientBox("", true));
   $("allRecipes").addEventListener("click", () => showProfile(null));
   $("familyNav").addEventListener("click", () => {
@@ -652,6 +671,149 @@ async function saveProfile(event) {
     for (const field of $("profileForm").elements) field.disabled = false;
     $("closeProfileEditor").disabled = false;
     $("logout").disabled = false;
+  }
+}
+
+
+function isCurrentRecipe(id) {
+  return Boolean(user && $("viewer").open && selected?.id === id);
+}
+
+function updateSocialControls() {
+  const disabled = socialBusy || !socialReady;
+  for (const id of ["thumbUp", "thumbDown", "postComment", "moreComments"]) $(id).disabled = disabled;
+  $("refreshSocial").disabled = socialBusy;
+  for (const button of $("commentList").querySelectorAll("button[data-delete-comment]")) button.disabled = disabled;
+}
+
+async function loadSocial(recipeId) {
+  const version = ++socialVersion;
+  socialReady = false;
+  updateSocialControls();
+  $("socialMessage").textContent = "Loading votes and comments…";
+  $("commentList").replaceChildren();
+  $("moreComments").hidden = true;
+  $("thumbUp").textContent = "👍 …";
+  $("thumbDown").textContent = "👎 …";
+  $("thumbUp").setAttribute("aria-pressed", "false");
+  $("thumbDown").setAttribute("aria-pressed", "false");
+  try {
+    const results = await Promise.all([
+      db.rpc("recipe_vote_summary", { p_recipe_id: recipeId }),
+      db.from("recipe_comments").select("*").eq("recipe_id", recipeId)
+        .order("created_at", { ascending: false }).order("id", { ascending: false })
+        .range(0, commentLimit),
+      db.from("profiles").select("*")
+    ]);
+    if (version !== socialVersion || !isCurrentRecipe(recipeId)) return;
+    const [summaries, comments, people] = results.map(check);
+    const summary = summaries[0] || { thumbs_up: 0, thumbs_down: 0, my_vote: 0 };
+    myVote = Number(summary.my_vote || 0);
+    $("thumbUp").textContent = `👍 ${summary.thumbs_up}`;
+    $("thumbDown").textContent = `👎 ${summary.thumbs_down}`;
+    $("thumbUp").setAttribute("aria-label", `Thumbs up: ${summary.thumbs_up} votes`);
+    $("thumbDown").setAttribute("aria-label", `Thumbs down: ${summary.thumbs_down} votes`);
+    $("thumbUp").setAttribute("aria-pressed", String(myVote === 1));
+    $("thumbDown").setAttribute("aria-pressed", String(myVote === -1));
+    if (!comments.length) $("commentList").append(node("p", "No comments yet. Be the first to share a tip!", "muted"));
+    for (const comment of comments.slice(0, commentLimit).reverse()) {
+      const profile = people.find(p => p.user_id === comment.author_id);
+      const name = profile?.display_name || (comment.author_id ? "Family member" : "Former family member");
+      const row = node("article", undefined, "comment");
+      const content = node("div", undefined, "comment-content");
+      const heading = node(profile ? "button" : "strong", name, "comment-name");
+      if (profile) {
+        heading.type = "button";
+        heading.addEventListener("click", () => {
+          $("viewer").close();
+          profiles = people;
+          showProfile(profile.user_id);
+        });
+      }
+      const date = node("time", new Date(comment.created_at).toLocaleString(), "muted");
+      date.dateTime = comment.created_at;
+      content.append(heading, date, node("p", comment.body, "text"));
+      if (comment.author_id === user.id) {
+        const remove = node("button", "Delete my comment", "secondary");
+        remove.type = "button";
+        remove.dataset.deleteComment = comment.id;
+        remove.addEventListener("click", () => deleteRecipeComment(comment.id, recipeId));
+        content.append(remove);
+      }
+      row.append(avatar(profile || { display_name: name }), content);
+      $("commentList").append(row);
+    }
+    $("moreComments").hidden = comments.length <= commentLimit;
+    socialReady = true;
+    $("socialMessage").textContent = "";
+  } catch (error) {
+    if (version === socialVersion && isCurrentRecipe(recipeId)) {
+      $("socialMessage").textContent = `Could not load votes or comments: ${error.message}. Try Refresh.`;
+    }
+  } finally {
+    if (version === socialVersion && isCurrentRecipe(recipeId)) updateSocialControls();
+  }
+}
+
+async function voteOnRecipe(value) {
+  if (!socialReady || socialBusy || !selected || !user) return;
+  const recipeId = selected.id;
+  const accountId = user.id;
+  socialBusy = true;
+  updateSocialControls();
+  try {
+    if (myVote === value) {
+      check(await db.from("recipe_votes").delete().eq("recipe_id", recipeId).eq("user_id", accountId));
+    } else {
+      check(await db.from("recipe_votes").upsert({ recipe_id: recipeId, user_id: accountId, value },
+        { onConflict: "recipe_id,user_id" }));
+    }
+    if (isCurrentRecipe(recipeId)) await loadSocial(recipeId);
+  } catch (error) {
+    if (isCurrentRecipe(recipeId)) $("socialMessage").textContent = `Vote could not be saved: ${error.message}`;
+  } finally {
+    socialBusy = false;
+    updateSocialControls();
+  }
+}
+
+async function postRecipeComment(event) {
+  event.preventDefault();
+  if (!socialReady || socialBusy || !selected || !user) return;
+  const body = $("commentBody").value.trim();
+  if (!body) { $("commentMessage").textContent = "Write a comment first."; return; }
+  if (body.length > 2000) { $("commentMessage").textContent = "Please keep comments under 2,000 characters."; return; }
+  const recipeId = selected.id;
+  socialBusy = true;
+  updateSocialControls();
+  $("commentMessage").textContent = "Posting…";
+  try {
+    check(await db.from("recipe_comments").insert({ recipe_id: recipeId, author_id: user.id, body }));
+    if (isCurrentRecipe(recipeId)) {
+      if ($("commentBody").value.trim() === body) $("commentBody").value = "";
+      $("commentMessage").textContent = "Comment posted.";
+      await loadSocial(recipeId);
+    }
+  } catch (error) {
+    if (isCurrentRecipe(recipeId)) $("commentMessage").textContent = `Comment could not be posted: ${error.message}`;
+  } finally {
+    socialBusy = false;
+    updateSocialControls();
+  }
+}
+
+async function deleteRecipeComment(commentId, recipeId) {
+  if (socialBusy || !socialReady || !isCurrentRecipe(recipeId) || !confirm("Delete your comment?")) return;
+  socialBusy = true;
+  updateSocialControls();
+  try {
+    check(await db.from("recipe_comments").delete().eq("id", commentId).eq("author_id", user.id).select().single());
+    if (isCurrentRecipe(recipeId)) await loadSocial(recipeId);
+  } catch (error) {
+    if (isCurrentRecipe(recipeId)) $("commentMessage").textContent = `Could not delete comment: ${error.message}`;
+  } finally {
+    socialBusy = false;
+    updateSocialControls();
   }
 }
 

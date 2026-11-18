@@ -129,6 +129,16 @@
     .ingredients-fieldset legend { font-weight: 600; }
     #ingredientBoxes input { display: block; margin: 8px 0; }
     #addIngredient { font-size: 24px; line-height: 1; min-width: 44px; min-height: 44px; }
+    #recipeSocial { border-top: 1px solid var(--line); margin-top: 28px; padding-top: 4px; }
+    #recipeSocial button[aria-pressed="true"] { background: var(--green); color: white; }
+    #commentBody { min-height: 90px; margin-bottom: 10px; }
+    .comment { display: flex; align-items: flex-start; gap: 12px; padding: 18px 0; border-bottom: 1px solid var(--line); }
+    .comment .avatar { width: 40px; height: 40px; flex: 0 0 40px; font-size: 20px; }
+    .comment-content { min-width: 0; flex: 1; }
+    .comment-name { padding: 0; background: transparent; color: var(--green); font-weight: 700; text-align: left; }
+    .comment .text { margin: 6px 0; }
+    .comment time { display: block; }
+    @media print { #recipeSocial { display: none !important; } }
   </style>
 </head>
 <body>
@@ -197,6 +207,25 @@
   <h3>Instructions</h3><div id="recipeInstructions" class="text"></div>
   <section id="notesSection">
     <h3>Family notes</h3><div id="recipeNotes" class="text"></div>
+  </section>
+  <section id="recipeSocial" aria-label="Recipe reactions and comments">
+    <h3>What do you think?</h3>
+    <div class="row">
+      <button id="thumbUp" type="button" class="secondary" aria-pressed="false" disabled>👍 0</button>
+      <button id="thumbDown" type="button" class="secondary" aria-pressed="false" disabled>👎 0</button>
+      <button id="refreshSocial" type="button" class="secondary">Refresh</button>
+    </div>
+    <p class="muted">Only totals are shown. Tap your selected thumb again to remove your vote.</p>
+    <p id="socialMessage" role="status" aria-live="polite"></p>
+    <h3>Family comments</h3>
+    <form id="commentForm">
+      <label for="commentBody">Leave a comment</label>
+      <textarea id="commentBody" maxlength="2000" required placeholder="How did it turn out? Any tips for the family?"></textarea>
+      <button id="postComment" type="submit" disabled>Post comment</button>
+    </form>
+    <p id="commentMessage" role="status" aria-live="polite"></p>
+    <div id="commentList" aria-label="Comments"></div>
+    <button id="moreComments" type="button" class="secondary" hidden>Show older comments</button>
   </section>
   <div class="row" style="margin-top:24px">
     <button id="print" class="secondary">Print</button>
@@ -268,6 +297,6 @@
     <button type="submit">Save profile</button>
   </form>
 </dialog>
-<script type="module" src="./app.js?v=ingredients-1"></script>
+<script type="module" src="./app.js?v=social-1"></script>
 </body>
 </html>
