@@ -25,6 +25,8 @@ let socialBusy = false;
 let socialReady = false;
 let myVote = 0;
 let commentLimit = 50;
+let cardCounts = new Map();
+let cardCountsVersion = 0;
 const avatarCache = new Map();
 
 function status(message) {
@@ -80,11 +82,49 @@ function metadata(recipe) {
   ].filter(Boolean).join(" · ");
 }
 
+function fillCardCounts(element, counts) {
+  element.replaceChildren();
+  for (const [emoji, key, label] of [
+    ["👍", "thumbs_up", "Thumbs up"],
+    ["👎", "thumbs_down", "Thumbs down"],
+    ["💬", "comments", "Comments"]
+  ]) {
+    const value = counts ? String(counts[key] ?? 0) : "—";
+    const item = node("span", `${emoji} ${value}`);
+    item.setAttribute("aria-label", `${label}: ${counts ? value : "unavailable"}`);
+    item.title = `${label}: ${counts ? value : "not loaded"}`;
+    element.append(item);
+  }
+}
+
+async function refreshCardCounts() {
+  const version = ++cardCountsVersion;
+  const accountId = user?.id;
+  if (!accountId || !recipes.length) return;
+  try {
+    const rows = check(await db.rpc("recipe_card_counts", {
+      p_recipe_ids: recipes.map(recipe => recipe.id)
+    }));
+    if (version !== cardCountsVersion || user?.id !== accountId) return;
+    cardCounts = new Map(rows.map(row => [row.recipe_id, row]));
+    for (const element of $("recipes").querySelectorAll("[data-recipe-stats]")) {
+      fillCardCounts(element, cardCounts.get(element.dataset.recipeStats));
+      element.title = "";
+    }
+  } catch (error) {
+    if (version !== cardCountsVersion || user?.id !== accountId) return;
+    for (const element of $("recipes").querySelectorAll("[data-recipe-stats]")) {
+      element.title = `Could not refresh counts: ${error.message}. Reload to retry.`;
+    }
+  }
+}
+
 async function loadRecipes() {
   recipes = check(await db.from("recipes")
     .select("*")
     .order("created_at", { ascending: false }));
   render();
+  await refreshCardCounts();
 }
 
 function render() {
@@ -115,12 +155,18 @@ function render() {
     const content = node("div", undefined, "card-body");
     const open = node("button", "View recipe");
 
+    const footer = node("div", undefined, "recipe-card-footer");
+    const stats = node("div", undefined, "recipe-card-stats");
+    stats.dataset.recipeStats = recipe.id;
+    fillCardCounts(stats, cardCounts.get(recipe.id));
+    footer.append(open, stats);
+
     content.append(
       node("span", recipe.category, "tag"),
       node("h3", recipe.title),
       node("p", metadata(recipe), "muted"),
       profileButton(recipe.owner_id),
-      open
+      footer
     );
     card.append(cover, content);
     $("recipes").append(card);
@@ -157,6 +203,7 @@ async function openRecipe(recipe) {
   $("commentMessage").textContent = "";
   commentLimit = 50;
   loadSocial(recipe.id);
+  refreshCardCounts();
 
   const photos = await listPhotos(recipe);
   if (selected?.id !== recipe.id || !$("viewer").open) return;
@@ -406,6 +453,8 @@ async function refreshSession() {
     $("familyGrid").replaceChildren();
     $("profileBanner").replaceChildren();
     $("profileEditor").close();
+    cardCountsVersion++;
+    cardCounts.clear();
     recipes = [];
     generation++;
     $("recipes").replaceChildren();
@@ -451,7 +500,7 @@ async function start() {
   $("thumbDown").addEventListener("click", () => voteOnRecipe(-1));
   $("commentForm").addEventListener("submit", postRecipeComment);
   $("refreshSocial").addEventListener("click", () => {
-    if (selected && !socialBusy) loadSocial(selected.id);
+    if (selected && !socialBusy) { loadSocial(selected.id); refreshCardCounts(); }
   });
   $("moreComments").addEventListener("click", () => {
     if (selected && !socialBusy) { commentLimit += 50; loadSocial(selected.id); }
@@ -768,6 +817,7 @@ async function voteOnRecipe(value) {
       check(await db.from("recipe_votes").upsert({ recipe_id: recipeId, user_id: accountId, value },
         { onConflict: "recipe_id,user_id" }));
     }
+    await refreshCardCounts();
     if (isCurrentRecipe(recipeId)) await loadSocial(recipeId);
   } catch (error) {
     if (isCurrentRecipe(recipeId)) $("socialMessage").textContent = `Vote could not be saved: ${error.message}`;
@@ -789,6 +839,7 @@ async function postRecipeComment(event) {
   $("commentMessage").textContent = "Posting…";
   try {
     check(await db.from("recipe_comments").insert({ recipe_id: recipeId, author_id: user.id, body }));
+    await refreshCardCounts();
     if (isCurrentRecipe(recipeId)) {
       if ($("commentBody").value.trim() === body) $("commentBody").value = "";
       $("commentMessage").textContent = "Comment posted.";
@@ -808,6 +859,7 @@ async function deleteRecipeComment(commentId, recipeId) {
   updateSocialControls();
   try {
     check(await db.from("recipe_comments").delete().eq("id", commentId).eq("author_id", user.id).select().single());
+    await refreshCardCounts();
     if (isCurrentRecipe(recipeId)) await loadSocial(recipeId);
   } catch (error) {
     if (isCurrentRecipe(recipeId)) $("commentMessage").textContent = `Could not delete comment: ${error.message}`;
