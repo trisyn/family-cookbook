@@ -149,6 +149,50 @@
     .comment-content #commentForm { margin-top: 16px; }
     #replyNotice { margin-bottom: 8px; }
     @media (max-width: 480px) { .comment-replies { margin-left: 8px; padding-left: 8px; } }
+    /* Each original comment and its replies form one distinct conversation. */
+    #commentList { margin-top: 22px; }
+    .comment-thread {
+      margin: 0 0 24px;
+      padding: 18px;
+      border: 1px solid #cbd4c8;
+      border-radius: 14px;
+      background: #fffefb;
+      box-shadow: 0 2px 5px #29382f08;
+    }
+    .comment-thread > .comment { padding: 0; border: 0; }
+    .comment-thread > .comment-replies {
+      margin: 16px 0 0 28px;
+      padding: 12px 14px;
+      border: 0;
+      border-left: 4px solid #78917d;
+      border-radius: 0 10px 10px 0;
+      background: #edf1e8;
+    }
+    .comment-thread > .comment-replies:not(:has(.comment)):not(:has(button:not([hidden]))) {
+      display: none;
+    }
+    .comment-thread > .comment-replies:has(.comment)::before {
+      content: "Replies";
+      display: block;
+      margin-bottom: 12px;
+      color: #385747;
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: .06em;
+      text-transform: uppercase;
+    }
+    .comment-replies .comment { padding: 14px 0; border: 0; }
+    .comment-replies .comment:first-child { padding-top: 0; }
+    .comment-replies .comment:last-child { padding-bottom: 0; }
+    .comment-replies .comment + .comment { border-top: 1px solid #d0d9cb; }
+    .comment-replies .avatar { width: 34px; height: 34px; flex-basis: 34px; }
+    .comment-thread .comment-content { overflow-wrap: anywhere; }
+    @media (max-width: 480px) {
+      .comment-thread { padding: 12px; margin-bottom: 20px; }
+      .comment-thread > .comment-replies { margin-left: 10px; padding: 12px 10px; }
+      .comment-thread .comment { gap: 8px; }
+      .comment-thread .row > button { font-size: 13px; padding: 8px 10px; }
+    }
   </style>
 </head>
 <body>
