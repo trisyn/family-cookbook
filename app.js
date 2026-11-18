@@ -156,9 +156,38 @@ async function openRecipe(recipe) {
   );
 }
 
+function splitIngredients(text) {
+  return text.split(/\r?\n/).filter(line => line.trim());
+}
+
+function joinIngredients(values) {
+  return values.map(value => String(value).trim()).filter(Boolean).join("\n");
+}
+
+function addIngredientBox(value = "", focus = false) {
+  const number = $("ingredientBoxes").children.length + 1;
+  const input = node("input");
+  input.type = "text";
+  input.name = "ingredient";
+  input.maxLength = 20000;
+  input.placeholder = number === 1 ? "e.g. 2 cups flour" : "Next ingredient";
+  input.setAttribute("aria-label", `Ingredient ${number}`);
+  input.required = number === 1;
+  input.value = value;
+  $("ingredientBoxes").append(input);
+  if (focus) input.focus();
+}
+
+function setIngredientBoxes(text) {
+  $("ingredientBoxes").replaceChildren();
+  const lines = splitIngredients(text);
+  for (const line of lines.length ? lines : [""]) addIngredientBox(line);
+}
+
 async function openEditor(recipe = null) {
   editing = recipe;
   form.reset();
+  setIngredientBoxes(recipe?.ingredients || "");
   currentPhotos = [];
   $("existingPhotos").replaceChildren();
   $("formMessage").textContent = "";
@@ -167,7 +196,7 @@ async function openEditor(recipe = null) {
   if (recipe) {
     for (const key of [
       "title", "author", "category", "minutes",
-      "servings", "ingredients", "instructions", "notes"
+      "servings", "instructions", "notes"
     ]) {
       form.elements.namedItem(key).value = recipe[key] ?? "";
     }
@@ -241,7 +270,7 @@ async function saveRecipe(event) {
     category: text("category"),
     minutes: text("minutes") === "" ? null : Number(text("minutes")),
     servings: text("servings") === "" ? null : Number(text("servings")),
-    ingredients: text("ingredients"),
+    ingredients: joinIngredients(values.getAll("ingredient")),
     instructions: text("instructions"),
     notes: text("notes")
   };
@@ -249,6 +278,11 @@ async function saveRecipe(event) {
   if (!payload.title || !payload.author ||
       !payload.ingredients || !payload.instructions) {
     $("formMessage").textContent = "Fill in the recipe name, author, ingredients, and instructions.";
+    return;
+  }
+
+  if (payload.ingredients.length > 20000) {
+    $("formMessage").textContent = "Your ingredients are too long. Please use fewer than 20,000 characters in total.";
     return;
   }
 
@@ -404,6 +438,7 @@ async function start() {
   }
 
   db = createClient(SUPABASE_URL, SUPABASE_KEY);
+  $("addIngredient").addEventListener("click", () => addIngredientBox("", true));
   $("allRecipes").addEventListener("click", () => showProfile(null));
   $("familyNav").addEventListener("click", () => {
     $("book").hidden = true;

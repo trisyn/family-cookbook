@@ -125,6 +125,10 @@
     #accountNav { margin-bottom: 28px; }
     #profileBanner { margin-bottom: 28px; }
     #removeAvatar { width: auto; margin-right: 8px; }
+    .ingredients-fieldset { border: 0; padding: 0; margin: 15px 0; min-width: 0; }
+    .ingredients-fieldset legend { font-weight: 600; }
+    #ingredientBoxes input { display: block; margin: 8px 0; }
+    #addIngredient { font-size: 24px; line-height: 1; min-width: 44px; min-height: 44px; }
   </style>
 </head>
 <body>
@@ -227,9 +231,12 @@
         <input name="servings" type="number" min="1" max="1000">
       </label>
     </div>
-    <label>Ingredients — one per line
-      <textarea name="ingredients" maxlength="20000" required></textarea>
-    </label>
+    <fieldset class="ingredients-fieldset">
+      <legend>Ingredients — one per box</legend>
+      <div id="ingredientBoxes"></div>
+      <button id="addIngredient" type="button" class="secondary"
+              aria-label="Add another ingredient">+</button>
+    </fieldset>
     <label>Instructions
       <textarea name="instructions" maxlength="30000" required></textarea>
     </label>
@@ -261,6 +268,6 @@
     <button type="submit">Save profile</button>
   </form>
 </dialog>
-<script type="module" src="./app.js?v=profiles-1"></script>
+<script type="module" src="./app.js?v=ingredients-1"></script>
 </body>
 </html>
