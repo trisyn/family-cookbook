@@ -193,6 +193,25 @@
       .comment-thread .comment { gap: 8px; }
       .comment-thread .row > button { font-size: 13px; padding: 8px 10px; }
     }
+    .comment-footer { display: flex; justify-content: space-between; align-items: flex-end; flex-wrap: wrap; gap: 12px; margin-top: 10px; }
+    .comment-votes { display: flex; gap: 6px; margin-left: auto; }
+    .comment-votes button { padding: 7px 10px; white-space: nowrap; font-size: 13px; }
+    .comment-votes button[aria-pressed="true"] { background: var(--green); color: white; }
+    .nested-thread { margin-top: 14px; }
+    .nested-thread:first-child { margin-top: 0; }
+    .nested-thread > .comment { border: 0; padding: 0; }
+    .nested-thread + .nested-thread { border-top: 1px solid #cbd4c8; padding-top: 14px; }
+    .comment-replies .comment-replies { margin: 12px 0 0 12px; padding: 10px 0 0 12px; border-left: 2px solid #b2c1ac; }
+    /* Cap visual indentation so deep conversations remain readable on phones. */
+    .comment-replies .comment-replies .comment-replies { margin-left: 0; padding-left: 0; border-left: 0; }
+    .comment-replies:not(:has(.comment)):not(:has(button:not([hidden]))) { display: none; }
+    .comment-replies:not(:has(.comment))::before { display: none; }
+    @media (max-width: 480px) {
+      .comment-footer > .row { gap: 6px; }
+      .comment-votes button { padding: 7px 8px; }
+      .comment-replies .comment-replies { margin-left: 6px; padding-left: 6px; }
+      .comment-replies .comment-replies .comment-replies { margin-left: 0; padding-left: 0; }
+    }
   </style>
 </head>
 <body>
@@ -357,6 +376,6 @@
     <button type="submit">Save profile</button>
   </form>
 </dialog>
-<script type="module" src="./app.js?v=replies-1"></script>
+<script type="module" src="./app.js?v=comment-votes-1"></script>
 </body>
 </html>

@@ -26,6 +26,7 @@ let socialReady = false;
 let myVote = 0;
 let commentLimit = 50;
 let replyTarget = null;
+let commentVoteCounts = new Map();
 let cardCounts = new Map();
 let cardCountsVersion = 0;
 const avatarCache = new Map();
@@ -728,6 +729,68 @@ async function saveProfile(event) {
 
 
 
+
+function paintCommentVotes(container, counts) {
+  for (const button of container.querySelectorAll("button[data-vote-value]")) {
+    const value = Number(button.dataset.voteValue);
+    const number = counts ? (value === 1 ? counts.thumbs_up : counts.thumbs_down) : "—";
+    const label = value === 1 ? "Thumbs up" : "Thumbs down";
+    button.textContent = `${value === 1 ? "👍" : "👎"} ${number}`;
+    button.setAttribute("aria-label", `${label} on comment: ${number}`);
+    button.setAttribute("aria-pressed", String(Number(counts?.my_vote) === value));
+    button.disabled = socialBusy || !socialReady || !counts;
+    button.title = counts ? "Click again to remove your vote" : "Vote counts unavailable; use Refresh to retry";
+  }
+}
+
+function refreshCommentVoteButtons() {
+  for (const container of $("commentList").querySelectorAll("[data-comment-votes]")) {
+    paintCommentVotes(container, commentVoteCounts.get(container.dataset.commentVotes));
+  }
+}
+
+async function fetchCommentVotes(ids, recipeId, version) {
+  if (!ids.length) return;
+  try {
+    const rows = check(await db.rpc("comment_vote_summary", { p_comment_ids: ids }));
+    if (version !== socialVersion || !isCurrentRecipe(recipeId)) return;
+    for (const row of rows) commentVoteCounts.set(row.comment_id, row);
+  } catch (error) {
+    if (version === socialVersion && isCurrentRecipe(recipeId)) {
+      for (const id of ids) commentVoteCounts.delete(id);
+    }
+  }
+}
+
+async function voteOnComment(commentId, recipeId, value) {
+  const summary = commentVoteCounts.get(commentId);
+  if (socialBusy || !socialReady || !summary || !isCurrentRecipe(recipeId)) return;
+  const version = socialVersion;
+  const accountId = user.id;
+  socialBusy = true;
+  updateSocialControls();
+  try {
+    if (Number(summary.my_vote) === value) {
+      check(await db.from("comment_votes").delete().eq("comment_id", commentId).eq("user_id", accountId));
+    } else {
+      check(await db.from("comment_votes").upsert({ comment_id: commentId, user_id: accountId, value },
+        { onConflict: "comment_id,user_id" }));
+    }
+    if (version === socialVersion && isCurrentRecipe(recipeId)) {
+      await fetchCommentVotes([commentId], recipeId, version);
+      $("commentMessage").textContent = commentVoteCounts.has(commentId)
+        ? "Comment vote saved." : "Vote saved; use Refresh to reload its count.";
+    }
+  } catch (error) {
+    if (version === socialVersion && isCurrentRecipe(recipeId)) {
+      $("commentMessage").textContent = `Could not save comment vote: ${error.message}`;
+    }
+  } finally {
+    socialBusy = false;
+    updateSocialControls();
+  }
+}
+
 function cancelReply(clearDraft = true) {
   replyTarget = null;
   $("replyNotice").hidden = true;
@@ -749,7 +812,7 @@ function beginReply(comment, name, mount) {
   $("commentBody").focus();
 }
 
-function renderThreadComment(comment, recipeId, people, canReply) {
+function renderThreadComment(comment, recipeId, people, canReply = true) {
   const profile = people.find(p => p.user_id === comment.author_id);
   const name = profile?.display_name || (comment.author_id ? "Family member" : "Former family member");
   const row = node("article", undefined, "comment");
@@ -761,13 +824,14 @@ function renderThreadComment(comment, recipeId, people, canReply) {
       $("viewer").close(); profiles = people; showProfile(profile.user_id);
     });
   }
-  const date = node("time", new Date(comment.created_at).toLocaleString(), "muted");
+  const date = node("time", new Date(comment.created_at).toLocaleString(undefined, { year: "numeric", month: "numeric", day: "numeric", hour: "numeric", minute: "2-digit" }), "muted");
   date.dateTime = comment.created_at;
   content.append(heading, date, node("p", comment.body, "text"));
   const actions = node("div", undefined, "row");
   if (canReply) {
     const reply = node("button", "Reply", "secondary");
     reply.type = "button";
+    reply.dataset.replyComment = comment.id;
     reply.addEventListener("click", () => beginReply(comment, name, content));
     actions.append(reply);
   }
@@ -778,7 +842,19 @@ function renderThreadComment(comment, recipeId, people, canReply) {
     remove.addEventListener("click", () => deleteRecipeComment(comment.id, recipeId));
     actions.append(remove);
   }
-  content.append(actions);
+  const footer = node("div", undefined, "comment-footer");
+  const votes = node("div", undefined, "comment-votes");
+  votes.dataset.commentVotes = comment.id;
+  for (const value of [1, -1]) {
+    const button = node("button", "", "secondary");
+    button.type = "button";
+    button.dataset.voteValue = String(value);
+    button.addEventListener("click", () => voteOnComment(comment.id, recipeId, value));
+    votes.append(button);
+  }
+  paintCommentVotes(votes, commentVoteCounts.get(comment.id));
+  footer.append(actions, votes);
+  content.append(footer);
   row.append(avatar(profile || { display_name: name }), content);
   return { row, content };
 }
@@ -799,7 +875,17 @@ async function loadThreadReplies(parentId, recipeId, people, container, version)
         .order("created_at", { ascending: true }).order("id", { ascending: true })
         .range(offset, offset + 49));
       if (version !== socialVersion || !isCurrentRecipe(recipeId) || !container.isConnected) return;
-      for (const reply of rows) list.append(renderThreadComment(reply, recipeId, people, false).row);
+      await fetchCommentVotes(rows.map(reply => reply.id), recipeId, version);
+      if (version !== socialVersion || !isCurrentRecipe(recipeId) || !container.isConnected) return;
+      for (const reply of rows) {
+        const thread = node("section", undefined, "nested-thread");
+        const rendered = renderThreadComment(reply, recipeId, people, true);
+        const children = node("div", undefined, "comment-replies");
+        thread.append(rendered.row, children);
+        list.append(thread);
+        if (replyTarget?.id === reply.id) rendered.content.append($("commentForm"));
+        loadThreadReplies(reply.id, recipeId, people, children, version);
+      }
       offset += rows.length;
       more.hidden = rows.length < 50;
       more.textContent = "Show more replies";
@@ -822,11 +908,14 @@ function updateSocialControls() {
   const disabled = socialBusy || !socialReady;
   for (const id of ["thumbUp", "thumbDown", "postComment", "moreComments"]) $(id).disabled = disabled;
   $("refreshSocial").disabled = socialBusy;
-  for (const button of $("commentList").querySelectorAll("button[data-delete-comment]")) button.disabled = disabled;
+  for (const button of $("commentList").querySelectorAll("button[data-delete-comment], button[data-reply-comment]")) button.disabled = disabled;
+  $("cancelReply").disabled = socialBusy;
+  refreshCommentVoteButtons();
 }
 
 async function loadSocial(recipeId) {
   const version = ++socialVersion;
+  commentVoteCounts.clear();
   socialReady = false;
   updateSocialControls();
   $("socialMessage").textContent = "Loading votes and comments…";
@@ -847,6 +936,8 @@ async function loadSocial(recipeId) {
     ]);
     if (version !== socialVersion || !isCurrentRecipe(recipeId)) return;
     const [summaries, comments, people] = results.map(check);
+    await fetchCommentVotes(comments.slice(0, commentLimit).map(comment => comment.id), recipeId, version);
+    if (version !== socialVersion || !isCurrentRecipe(recipeId)) return;
     const summary = summaries[0] || { thumbs_up: 0, thumbs_down: 0, my_vote: 0 };
     myVote = Number(summary.my_vote || 0);
     $("thumbUp").textContent = `👍 ${summary.thumbs_up}`;
