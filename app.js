@@ -16,6 +16,11 @@ let editing = null;
 let currentPhotos = [];
 let busy = false;
 let generation = 0;
+let profiles = [];
+let profileOwner = null;
+let profileBusy = false;
+let sessionVersion = 0;
+const avatarCache = new Map();
 
 function status(message) {
   $("status").textContent = message;
@@ -78,15 +83,17 @@ async function loadRecipes() {
 }
 
 function render() {
+  renderFamily();
   const version = ++generation;
   const query = $("search").value.toLowerCase().trim();
   const category = $("filter").value;
 
   const matches = recipes.filter(recipe =>
+    (!profileOwner || recipe.owner_id === profileOwner) &&
     (!category || recipe.category === category) &&
     [
       recipe.title, recipe.author, recipe.ingredients,
-      recipe.instructions, recipe.notes
+      recipe.instructions, recipe.notes, profileName(recipe.owner_id)
     ].join(" ").toLowerCase().includes(query)
   );
 
@@ -107,6 +114,7 @@ function render() {
       node("span", recipe.category, "tag"),
       node("h3", recipe.title),
       node("p", metadata(recipe), "muted"),
+      profileButton(recipe.owner_id),
       open
     );
     card.append(cover, content);
@@ -131,6 +139,7 @@ async function openRecipe(recipe) {
   selected = recipe;
   $("recipeTitle").textContent = recipe.title;
   $("recipeMeta").textContent = metadata(recipe);
+  $("recipeSubmitter").replaceChildren(profileButton(recipe.owner_id));
   $("recipeIngredients").textContent = recipe.ingredients;
   $("recipeInstructions").textContent = recipe.instructions;
   $("recipeNotes").textContent = recipe.notes;
@@ -337,14 +346,23 @@ async function deleteRecipe() {
 }
 
 async function refreshSession() {
+  const version = ++sessionVersion;
   const session = check(await db.auth.getSession()).session;
   user = session?.user ?? null;
 
   $("book").hidden = true;
+  $("accountNav").hidden = true;
+  $("familySection").hidden = true;
   $("login").hidden = Boolean(user);
   $("logout").hidden = !user;
 
   if (!user) {
+    profiles = [];
+    profileOwner = null;
+    avatarCache.clear();
+    $("familyGrid").replaceChildren();
+    $("profileBanner").replaceChildren();
+    $("profileEditor").close();
     recipes = [];
     generation++;
     $("recipes").replaceChildren();
@@ -361,9 +379,22 @@ async function refreshSession() {
     return;
   }
 
+  // Create a profile for this account without exposing its email.
+  check(await db.from("profiles").upsert(
+    { user_id: user.id }, { onConflict: "user_id", ignoreDuplicates: true }
+  ));
+  const loadedProfiles = check(await db.from("profiles").select("*")
+    .order("display_name"));
+  if (version !== sessionVersion) return;
+  profiles = loadedProfiles;
+  $("accountNav").hidden = false;
   $("book").hidden = false;
   status("");
   await loadRecipes();
+  if (version !== sessionVersion) return;
+  if (!profiles.find(p => p.user_id === user.id)?.display_name && !$("profileEditor").open) {
+    editMyProfile();
+  }
 }
 
 async function start() {
@@ -373,6 +404,18 @@ async function start() {
   }
 
   db = createClient(SUPABASE_URL, SUPABASE_KEY);
+  $("allRecipes").addEventListener("click", () => showProfile(null));
+  $("familyNav").addEventListener("click", () => {
+    $("book").hidden = true;
+    $("familySection").hidden = false;
+    renderFamily();
+  });
+  $("myProfile").addEventListener("click", () => showProfile(user.id));
+  $("closeProfileEditor").addEventListener("click", () => $("profileEditor").close());
+  $("profileEditor").addEventListener("cancel", event => {
+    if (profileBusy) event.preventDefault();
+  });
+  $("profileForm").addEventListener("submit", saveProfile);
 
   $("loginForm").addEventListener("submit", async event => {
     event.preventDefault();
@@ -433,6 +476,148 @@ async function start() {
   });
 
   await refreshSession();
+}
+
+
+function profileName(id) {
+  return profiles.find(profile => profile.user_id === id)?.display_name || "Family member";
+}
+
+function profileButton(id) {
+  const button = node("button", `Added by ${profileName(id)}`, "profile-link");
+  button.type = "button";
+  button.addEventListener("click", () => {
+    $("viewer").close();
+    showProfile(id);
+  });
+  return button;
+}
+
+function avatar(profile) {
+  const holder = node("div", (profile.display_name || "?").slice(0, 1).toUpperCase(), "avatar");
+  if (profile.avatar_path) {
+    const path = profile.avatar_path;
+    let pending = avatarCache.get(path);
+    if (!pending) {
+      pending = db.storage.from("profile-photos").createSignedUrl(path, 300)
+        .then(check).catch(error => { avatarCache.delete(path); throw error; });
+      avatarCache.set(path, pending);
+      setTimeout(() => avatarCache.delete(path), 240000);
+    }
+    pending.then(data => {
+      if (!user || !holder.isConnected) return;
+      const image = imageFor({ url: data.signedUrl }, `${profile.display_name || "Family member"}'s profile picture`);
+      image.addEventListener("error", () => image.remove());
+      holder.append(image);
+    }).catch(() => {});
+  }
+  return holder;
+}
+
+function renderFamily() {
+  $("familyGrid").replaceChildren();
+  for (const profile of profiles) {
+    const card = node("article", undefined, "card card-body");
+    const count = recipes.filter(recipe => recipe.owner_id === profile.user_id).length;
+    const button = node("button", "View profile", "secondary");
+    button.addEventListener("click", () => showProfile(profile.user_id));
+    card.append(avatar(profile), node("h3", profile.display_name || "Family member"),
+      node("p", `${count} recipe${count === 1 ? "" : "s"}`, "muted"), button);
+    $("familyGrid").append(card);
+  }
+  renderProfileBanner();
+}
+
+function renderProfileBanner() {
+  $("profileBanner").replaceChildren();
+  $("profileBanner").hidden = !profileOwner;
+  $("bookIntro").hidden = Boolean(profileOwner);
+  if (!profileOwner) return;
+  const profile = profiles.find(p => p.user_id === profileOwner);
+  if (!profile) return;
+  const count = recipes.filter(recipe => recipe.owner_id === profileOwner).length;
+  $("profileBanner").append(avatar(profile),
+    node("h1", profile.display_name || "Family member"),
+    node("p", `${count} recipe${count === 1 ? "" : "s"} shared with the family`));
+  if (profileOwner === user?.id) {
+    const edit = node("button", "Edit my profile", "secondary");
+    edit.addEventListener("click", editMyProfile);
+    $("profileBanner").append(edit);
+  }
+}
+
+function showProfile(id) {
+  profileOwner = id;
+  $("search").value = "";
+  $("filter").value = "";
+  $("familySection").hidden = true;
+  $("book").hidden = false;
+  render();
+}
+
+function editMyProfile() {
+  const profile = profiles.find(p => p.user_id === user.id);
+  $("profileName").value = profile?.display_name || "";
+  $("profilePicture").value = "";
+  $("removeAvatar").checked = false;
+  $("profileMessage").textContent = "";
+  $("profileEditor").showModal();
+}
+
+async function saveProfile(event) {
+  event.preventDefault();
+  if (profileBusy) return;
+  const displayName = $("profileName").value.trim();
+  const file = $("profilePicture").files[0];
+  if (!displayName) {
+    $("profileMessage").textContent = "Enter the name you want your family to see.";
+    return;
+  }
+  const extensions = { "image/jpeg": "jpg", "image/png": "png", "image/webp": "webp" };
+  if (file && (!extensions[file.type] || file.size > 5242880)) {
+    $("profileMessage").textContent = "Choose a JPG, PNG, or WebP picture under 5 MB.";
+    return;
+  }
+  const accountId = user.id;
+  const oldPath = profiles.find(p => p.user_id === accountId)?.avatar_path;
+  let newPath = null;
+  let saved = false;
+  profileBusy = true;
+  for (const field of $("profileForm").elements) field.disabled = true;
+  $("closeProfileEditor").disabled = true;
+  $("logout").disabled = true;
+  $("profileMessage").textContent = "Saving profile…";
+  try {
+    let path = $("removeAvatar").checked ? null : (oldPath || null);
+    if (file) {
+      newPath = `${accountId}/${crypto.randomUUID()}.${extensions[file.type]}`;
+      check(await db.storage.from("profile-photos").upload(newPath, file, {
+        contentType: file.type, upsert: false
+      }));
+      path = newPath;
+    }
+    const profile = check(await db.from("profiles").update({
+      display_name: displayName, avatar_path: path
+    }).eq("user_id", accountId).select().single());
+    saved = true;
+    profiles = profiles.map(p => p.user_id === accountId ? profile : p);
+    if (oldPath && oldPath !== path) {
+      // Saving the new profile succeeds independently of old-image cleanup.
+      await db.storage.from("profile-photos").remove([oldPath]);
+      avatarCache.delete(oldPath);
+    }
+    $("profileEditor").close();
+    render();
+    status("Your profile has been saved.");
+  } catch (error) {
+    if (newPath && !saved) await db.storage.from("profile-photos").remove([newPath]);
+    $("profileMessage").textContent = error.message;
+  } finally {
+    profileBusy = false;
+    for (const field of $("profileForm").elements) field.disabled = false;
+    $("closeProfileEditor").disabled = false;
+    $("logout").disabled = false;
+  }
 }
 
 start().catch(error => status(error.message));
