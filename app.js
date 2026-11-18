@@ -1,3 +1,4 @@
+import { createLoginStorage } from "./auth-storage.js?v=otp-1";
 import { createClient } from
   "https://esm.sh/@supabase/supabase-js@2";
 
@@ -9,6 +10,11 @@ const form = $("recipeForm");
 const bucketName = "recipe-photos";
 
 let db;
+let loginStorage;
+let loginEmail = "";
+let loginBusy = false;
+let resendAt = 0;
+let expiringLogin = false;
 let user = null;
 let recipes = [];
 let selected = null;
@@ -492,13 +498,121 @@ async function refreshSession() {
   }
 }
 
+
+function updateLoginButtons() {
+  const wait = Math.max(0, Math.ceil((resendAt - Date.now()) / 1000));
+  $("sendCode").disabled = loginBusy || wait > 0;
+  $("sendCode").textContent = wait > 0 ? `Send code (${wait}s)` : "Send sign-in code";
+  $("resendCode").disabled = loginBusy || wait > 0;
+  $("resendCode").textContent = wait > 0 ? `Resend code (${wait}s)` : "Resend code";
+  $("verifyCode").disabled = loginBusy;
+  $("changeEmail").disabled = loginBusy;
+  $("rememberMe").disabled = loginBusy;
+  $("email").readOnly = loginBusy;
+}
+
+function resetLoginForm() {
+  loginEmail = "";
+  $("loginCode").value = "";
+  $("codeStep").hidden = true;
+  $("loginForm").hidden = false;
+}
+
+async function sendLoginCode(event) {
+  event?.preventDefault();
+  if (loginBusy || Date.now() < resendAt) return;
+  const email = loginEmail || $("email").value.trim();
+  if (!email || !$("email").checkValidity()) {
+    $("email").reportValidity(); return;
+  }
+  loginBusy = true; updateLoginButtons();
+  status("Sending your sign-in code…");
+  try {
+    check(await db.auth.signInWithOtp({ email, options: { shouldCreateUser: false } }));
+    loginEmail = email;
+    resendAt = Date.now() + 60000;
+    $("codeEmail").textContent = email;
+    $("loginForm").hidden = true;
+    $("codeStep").hidden = false;
+    $("loginCode").value = "";
+    $("loginCode").focus();
+    status("Check your email, then enter the code here. You don't need to click a link.");
+  } catch (error) {
+    status(`Could not send code: ${error.message}`);
+  } finally { loginBusy = false; updateLoginButtons(); }
+}
+
+async function verifyLoginCode(event) {
+  event.preventDefault();
+  if (loginBusy || !loginEmail) return;
+  const token = $("loginCode").value.trim();
+  if (!/^\d{6}$/.test(token)) { status("Enter the six-digit code from your email."); return; }
+  loginBusy = true; updateLoginButtons();
+  status("Checking code…");
+  try {
+    // Set the fixed retention deadline before Supabase saves the new session.
+    loginStorage.prepare($("rememberMe").checked);
+    check(await db.auth.verifyOtp({ email: loginEmail, token, type: "email" }));
+    // Discard the previous version's unused login from this device.
+    const oldKey = `sb-${new URL(SUPABASE_URL).hostname.split(".")[0]}-auth-token`;
+    localStorage.removeItem(oldKey);
+    localStorage.removeItem(`${oldKey}-user`);
+    resetLoginForm();
+    status("");
+    await refreshSession();
+  } catch (error) {
+    status(`Could not sign in: ${error.message}. Use the newest code or request another.`);
+  } finally { loginBusy = false; updateLoginButtons(); }
+}
+
+async function expireRememberedLogin() {
+  if (!db || !user || expiringLogin || !loginStorage?.deadline || Date.now() < loginStorage.deadline) return;
+  expiringLogin = true;
+  try {
+    for (const dialog of document.querySelectorAll("dialog[open]")) dialog.close();
+    $("book").hidden = true;
+    $("accountNav").hidden = true;
+    $("familySection").hidden = true;
+    check(await db.auth.signOut({ scope: "local" }));
+    resetLoginForm();
+    await refreshSession();
+    status("Your 30 days are up. Enter your email for a new sign-in code.");
+  } catch (error) { status(`Please sign in again: ${error.message}`); }
+  finally { expiringLogin = false; }
+}
+
 async function start() {
   if (SUPABASE_URL.startsWith("YOUR_") || SUPABASE_KEY.startsWith("YOUR_")) {
     status("Setup needed: add your Supabase URL and publishable key to app.js.");
     return;
   }
 
-  db = createClient(SUPABASE_URL, SUPABASE_KEY);
+  loginStorage = createLoginStorage(localStorage, sessionStorage);
+  db = createClient(SUPABASE_URL, SUPABASE_KEY, {
+    auth: {
+      storageKey: "laramee-cookbook-auth-v2",
+      storage: loginStorage,
+      persistSession: true,
+      autoRefreshToken: true,
+      detectSessionInUrl: true
+    }
+  });
+  $("verifyForm").addEventListener("submit", verifyLoginCode);
+  $("resendCode").addEventListener("click", sendLoginCode);
+  $("changeEmail").addEventListener("click", () => {
+    if (loginBusy) return;
+    loginEmail = "";
+    $("codeStep").hidden = true;
+    $("loginForm").hidden = false;
+    $("loginCode").value = "";
+    $("email").focus();
+    status("");
+  });
+  // Return from Mail to the installed app without following an email link.
+  setInterval(() => { updateLoginButtons(); expireRememberedLogin(); }, 1000);
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden) expireRememberedLogin();
+  });
   $("thumbUp").addEventListener("click", () => voteOnRecipe(1));
   $("thumbDown").addEventListener("click", () => voteOnRecipe(-1));
   $("commentForm").addEventListener("submit", postRecipeComment);
@@ -521,30 +635,12 @@ async function start() {
   });
   $("profileForm").addEventListener("submit", saveProfile);
 
-  $("loginForm").addEventListener("submit", async event => {
-    event.preventDefault();
-    const button = event.currentTarget.querySelector("button");
-    button.disabled = true;
-
-    try {
-      check(await db.auth.signInWithOtp({
-        email: $("email").value.trim(),
-        options: {
-          shouldCreateUser: false,
-          emailRedirectTo: location.origin + location.pathname
-        }
-      }));
-      status("Check your email for a sign-in link. Only invited accounts can sign in.");
-    } catch (error) {
-      status(error.message);
-    } finally {
-      button.disabled = false;
-    }
-  });
+  $("loginForm").addEventListener("submit", sendLoginCode);
 
   $("logout").addEventListener("click", async () => {
     try {
-      check(await db.auth.signOut());
+      check(await db.auth.signOut({ scope: "local" }));
+      resetLoginForm();
       $("viewer").close();
       $("editor").close();
       await refreshSession();

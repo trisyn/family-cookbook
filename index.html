@@ -5,6 +5,11 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#385747">
   <title>Laramee Cookbook</title>
+  <link rel="manifest" href="./manifest.webmanifest">
+  <link rel="apple-touch-icon" href="./icon-180.png">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="Laramee Cookbook">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
   <style>
     :root {
       --paper: #faf7ef;
@@ -212,6 +217,9 @@
       .comment-replies .comment-replies { margin-left: 6px; padding-left: 6px; }
       .comment-replies .comment-replies .comment-replies { margin-left: 0; padding-left: 0; }
     }
+    .remember-option { display: flex; align-items: center; gap: 10px; font-weight: 400; }
+    .remember-option input { width: 20px; height: 20px; margin: 0; }
+    #loginCode { font-size: 28px; letter-spacing: .3em; text-align: center; }
   </style>
 </head>
 <body>
@@ -229,10 +237,26 @@
     <p>Sign in with your invited email to open the cookbook.</p>
     <form id="loginForm">
       <label>Email address
-        <input id="email" type="email" autocomplete="email" required>
+        <input id="email" type="email" autocomplete="email" inputmode="email" required>
       </label>
-      <button type="submit">Email me a sign-in link</button>
+      <button id="sendCode" type="submit">Send sign-in code</button>
     </form>
+    <div id="codeStep" hidden>
+      <p>Enter the six-digit code sent to <strong id="codeEmail"></strong>.</p>
+      <form id="verifyForm">
+        <label>Sign-in code
+          <input id="loginCode" type="text" inputmode="numeric" autocomplete="one-time-code"
+                 pattern="[0-9]{6}" maxlength="6" minlength="6" placeholder="000000" required>
+        </label>
+        <button id="verifyCode" type="submit">Verify and sign in</button>
+      </form>
+      <div class="row" style="margin-top:12px">
+        <button id="resendCode" type="button" class="secondary">Resend code</button>
+        <button id="changeEmail" type="button" class="secondary">Change email</button>
+      </div>
+    </div>
+    <label class="remember-option"><input id="rememberMe" type="checkbox"> Remember me for 30 days</label>
+    <p class="muted">Choose this only on your own device.</p>
   </section>
 
   <nav id="accountNav" class="row" aria-label="Cookbook navigation" hidden>
@@ -373,6 +397,6 @@
     <button type="submit">Save profile</button>
   </form>
 </dialog>
-<script type="module" src="./app.js?v=laramee-labels-1"></script>
+<script type="module" src="./app.js?v=otp-1"></script>
 </body>
 </html>
